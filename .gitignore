@@ -1,0 +1,44 @@
+# Ignore Gradle project-specific cache directory
+.gradle
+
+# Ignore Gradle build output directory
+build
+
+# Ignore JVM error logs
+*.log
+
+# Ignore class files
+*.class
+
+# Eclipse
+.classpath
+.project
+.metadata
+**/bin/
+tmp/
+*.tmp
+*.bak
+*.swp
+*~.nib
+.settings/
+.loadpath
+.externalToolBuilders/
+*.launch
+
+# NetBeans
+**/nbproject/private/
+nbbuild/
+dist/
+nbdist/
+nbactions.xml
+nb-configuration.xml
+
+# IntelliJ, Android Studio:
+.idea/
+*.ipr
+*.iws
+*.iml
+out/
+
+# OS Specific
+.DS_Store

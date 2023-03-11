@@ -1,0 +1,93 @@
+buildscript {
+	project.version = '0.0.1'
+	project.group = 'de.pottgames.vengine'
+}
+
+plugins {
+    id 'java-library'
+    id 'eclipse'
+    id 'maven-publish'
+    id 'java'
+    id "me.champeau.jmh" version "0.7.0"
+}
+
+// ECLIPSE SETTINGS
+eclipse.project.name = 'VEngine-lib'
+
+// ENCODING SETTINGS
+compileJava.options.encoding = "UTF-8"
+compileTestJava.options.encoding = "UTF-8"
+
+repositories {
+	mavenLocal()
+	mavenCentral()
+	google()
+	maven { url 'https://plugins.gradle.org/m2/' }
+	maven { url 'https://oss.sonatype.org/content/repositories/snapshots/' }
+	maven { url 'https://jitpack.io' }
+	gradlePluginPortal()
+}
+
+dependencies {
+	implementation platform("org.lwjgl:lwjgl-bom:3.3.1")
+
+	implementation "org.lwjgl:lwjgl"
+	implementation "org.lwjgl:lwjgl-assimp"
+	implementation "org.lwjgl:lwjgl-glfw"
+	implementation "org.lwjgl:lwjgl-openal"
+	implementation "org.lwjgl:lwjgl-stb"
+	implementation "org.lwjgl:lwjgl-vulkan"
+	runtimeOnly "org.lwjgl:lwjgl::natives-windows"
+	runtimeOnly "org.lwjgl:lwjgl-assimp::natives-windows"
+	runtimeOnly "org.lwjgl:lwjgl-glfw::natives-windows"
+	runtimeOnly "org.lwjgl:lwjgl-openal::natives-windows"
+	runtimeOnly "org.lwjgl:lwjgl-stb::natives-windows"
+}
+
+allprojects {
+	sourceCompatibility = JavaLanguageVersion.of(17)
+	compileJava {
+		options.incremental = true
+	}
+	
+	if(JavaVersion.current().isJava9Compatible()) {
+        tasks.withType(JavaCompile) {
+            options.release.set(8)
+        }
+    }
+}
+
+java {
+    withSourcesJar()
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            groupId = project.group
+            artifactId = project.name
+            version = project.version
+
+            from components.java
+        }
+    }
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+tasks.named('jar') {
+    manifest {
+        attributes('Implementation-Title': project.name,
+                   'Implementation-Version': project.version)
+    }
+}
+
+testing {
+    suites {
+        test {
+            useJUnitJupiter('5.8.1')
+        }
+    }
+}
