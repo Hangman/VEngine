@@ -1,15 +1,16 @@
 package de.pottgames.vengine.core;
 
 public class WindowConfiguration {
-    private String  title     = "VEngine Application";
-    private int     width     = 800;
-    private int     height    = 600;
-    private boolean visible   = true;
-    private boolean resizable = true;
-    private boolean center    = true;
-    private int     posX;
-    private int     posY;
-    private int     framerate = 60;
+    private String   title        = "VEngine Application";
+    private int      width        = 800;
+    private int      height       = 600;
+    private boolean  visible      = true;
+    private boolean  resizable    = true;
+    private boolean  center       = true;
+    private int      posX;
+    private int      posY;
+    private int      maxFramerate = 60;
+    private SwapMode swapMode     = SwapMode.VSYNC;
 
 
     public String getTitle() {
@@ -92,13 +93,23 @@ public class WindowConfiguration {
     }
 
 
-    public int getFramerate() {
-        return this.framerate;
+    public int getMaxFramerate() {
+        return this.maxFramerate;
     }
 
 
-    public void setFramerate(int framerate) {
-        this.framerate = framerate;
+    public void setMaxFramerate(int framerate) {
+        this.maxFramerate = framerate;
+    }
+
+
+    public SwapMode getSwapMode() {
+        return this.swapMode;
+    }
+
+
+    public void setSwapMode(SwapMode swapMode) {
+        this.swapMode = swapMode;
     }
 
 }

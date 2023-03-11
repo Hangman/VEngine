@@ -1,6 +1,8 @@
 package de.pottgames.vengine.core;
 
 public class VulkanUtils {
+    public static final int UINT32_MAX = 0xFFFFFFFF;
+
 
     public record ApiVersion(int major, int minor, int patch, int variant) {
 

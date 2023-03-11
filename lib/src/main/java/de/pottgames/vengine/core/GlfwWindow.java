@@ -8,8 +8,10 @@ import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.system.MemoryUtil;
 
 public class GlfwWindow implements Disposable {
-    private final long window;
-    private boolean    visible = false;
+    protected final long window;
+    private boolean      visible  = false;
+    private int[]        tempInt1 = new int[1];
+    private int[]        tempInt2 = new int[1];
 
 
     public GlfwWindow(WindowConfiguration config) {
@@ -54,6 +56,18 @@ public class GlfwWindow implements Disposable {
 
     public void setTitle(String title) {
         GLFW.glfwSetWindowTitle(this.window, title);
+    }
+
+
+    public int getFrameBufferWidth() {
+        GLFW.glfwGetFramebufferSize(this.window, this.tempInt1, this.tempInt2);
+        return this.tempInt1[0];
+    }
+
+
+    public int getFrameBufferHeight() {
+        GLFW.glfwGetFramebufferSize(this.window, this.tempInt1, this.tempInt2);
+        return this.tempInt2[0];
     }
 
 
