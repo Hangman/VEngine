@@ -31,6 +31,7 @@ import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
 import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkExtent2D;
+import org.lwjgl.vulkan.VkGraphicsPipelineCreateInfo;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkInstance;
 import org.lwjgl.vulkan.VkInstanceCreateInfo;
@@ -74,6 +75,7 @@ public class VulkanInitializer implements Disposable {
     private VkExtent2D     swapChainExtent;
     private long           pipelineLayout;
     private long           renderPass;
+    private long           graphicsPipeline;
 
     // QUEUES
     private VkQueue graphicsQueue;
@@ -280,6 +282,29 @@ public class VulkanInitializer implements Disposable {
             }
 
             this.pipelineLayout = pPipelineLayout.get(0);
+
+            final VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1, stack);
+            pipelineInfo.sType(VK10.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
+            pipelineInfo.pStages(shaderStages);
+            pipelineInfo.pVertexInputState(vertexInputInfo);
+            pipelineInfo.pInputAssemblyState(inputAssembly);
+            pipelineInfo.pViewportState(viewportState);
+            pipelineInfo.pRasterizationState(rasterizer);
+            pipelineInfo.pMultisampleState(multisampling);
+            pipelineInfo.pColorBlendState(colorBlending);
+            pipelineInfo.layout(this.pipelineLayout);
+            pipelineInfo.renderPass(this.renderPass);
+            pipelineInfo.subpass(0);
+            pipelineInfo.basePipelineHandle(VK10.VK_NULL_HANDLE);
+            pipelineInfo.basePipelineIndex(-1);
+
+            final LongBuffer pGraphicsPipeline = stack.mallocLong(1);
+
+            if (VK10.vkCreateGraphicsPipelines(this.device, VK10.VK_NULL_HANDLE, pipelineInfo, null, pGraphicsPipeline) != VK10.VK_SUCCESS) {
+                throw new RuntimeException("Failed to create graphics pipeline");
+            }
+
+            this.graphicsPipeline = pGraphicsPipeline.get(0);
 
             // ===> RELEASE RESOURCES <===
 
@@ -688,6 +713,7 @@ public class VulkanInitializer implements Disposable {
 
     @Override
     public void dispose() {
+        VK10.vkDestroyPipeline(this.device, this.graphicsPipeline, null);
         VK10.vkDestroyPipelineLayout(this.device, this.pipelineLayout, null);
         VK10.vkDestroyRenderPass(this.device, this.renderPass, null);
         this.swapChainImageViews.forEach(imageView -> VK10.vkDestroyImageView(this.device, imageView, null));
