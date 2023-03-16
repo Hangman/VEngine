@@ -31,6 +31,8 @@ import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
 import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkExtent2D;
+import org.lwjgl.vulkan.VkFramebufferCreateInfo;
+import org.lwjgl.vulkan.VkGraphicsPipelineCreateInfo;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkInstance;
 import org.lwjgl.vulkan.VkInstanceCreateInfo;
@@ -72,8 +74,10 @@ public class VulkanInitializer implements Disposable {
     private List<Long>     swapChainImageViews;
     private int            swapChainImageFormat;
     private VkExtent2D     swapChainExtent;
+    private List<Long>     swapChainFramebuffers;
     private long           pipelineLayout;
     private long           renderPass;
+    private long           graphicsPipeline;
 
     // QUEUES
     private VkQueue graphicsQueue;
@@ -124,6 +128,7 @@ public class VulkanInitializer implements Disposable {
         } catch (final IOException e) {
             throw new RuntimeException(e);
         }
+        this.createFrameBuffers();
 
         this.initialized = true;
     }
@@ -162,6 +167,37 @@ public class VulkanInitializer implements Disposable {
             }
 
             this.renderPass = pRenderPass.get(0);
+        }
+    }
+
+
+    private void createFrameBuffers() {
+        this.swapChainFramebuffers = new ArrayList<>(this.swapChainImageViews.size());
+
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            final LongBuffer attachments = stack.mallocLong(1);
+            final LongBuffer pFramebuffer = stack.mallocLong(1);
+
+            // Lets allocate the create info struct once and just update the pAttachments field each iteration
+            final VkFramebufferCreateInfo framebufferInfo = VkFramebufferCreateInfo.calloc(stack);
+            framebufferInfo.sType(VK10.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
+            framebufferInfo.renderPass(this.renderPass);
+            framebufferInfo.width(this.swapChainExtent.width());
+            framebufferInfo.height(this.swapChainExtent.height());
+            framebufferInfo.layers(1);
+
+            for (final long imageView : this.swapChainImageViews) {
+
+                attachments.put(0, imageView);
+
+                framebufferInfo.pAttachments(attachments);
+
+                if (VK10.vkCreateFramebuffer(this.device, framebufferInfo, null, pFramebuffer) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to create framebuffer");
+                }
+
+                this.swapChainFramebuffers.add(pFramebuffer.get(0));
+            }
         }
     }
 
@@ -280,6 +316,29 @@ public class VulkanInitializer implements Disposable {
             }
 
             this.pipelineLayout = pPipelineLayout.get(0);
+
+            final VkGraphicsPipelineCreateInfo.Buffer pipelineInfo = VkGraphicsPipelineCreateInfo.calloc(1, stack);
+            pipelineInfo.sType(VK10.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
+            pipelineInfo.pStages(shaderStages);
+            pipelineInfo.pVertexInputState(vertexInputInfo);
+            pipelineInfo.pInputAssemblyState(inputAssembly);
+            pipelineInfo.pViewportState(viewportState);
+            pipelineInfo.pRasterizationState(rasterizer);
+            pipelineInfo.pMultisampleState(multisampling);
+            pipelineInfo.pColorBlendState(colorBlending);
+            pipelineInfo.layout(this.pipelineLayout);
+            pipelineInfo.renderPass(this.renderPass);
+            pipelineInfo.subpass(0);
+            pipelineInfo.basePipelineHandle(VK10.VK_NULL_HANDLE);
+            pipelineInfo.basePipelineIndex(-1);
+
+            final LongBuffer pGraphicsPipeline = stack.mallocLong(1);
+
+            if (VK10.vkCreateGraphicsPipelines(this.device, VK10.VK_NULL_HANDLE, pipelineInfo, null, pGraphicsPipeline) != VK10.VK_SUCCESS) {
+                throw new RuntimeException("Failed to create graphics pipeline");
+            }
+
+            this.graphicsPipeline = pGraphicsPipeline.get(0);
 
             // ===> RELEASE RESOURCES <===
 
@@ -688,6 +747,8 @@ public class VulkanInitializer implements Disposable {
 
     @Override
     public void dispose() {
+        this.swapChainFramebuffers.forEach(framebuffer -> VK10.vkDestroyFramebuffer(this.device, framebuffer, null));
+        VK10.vkDestroyPipeline(this.device, this.graphicsPipeline, null);
         VK10.vkDestroyPipelineLayout(this.device, this.pipelineLayout, null);
         VK10.vkDestroyRenderPass(this.device, this.renderPass, null);
         this.swapChainImageViews.forEach(imageView -> VK10.vkDestroyImageView(this.device, imageView, null));
