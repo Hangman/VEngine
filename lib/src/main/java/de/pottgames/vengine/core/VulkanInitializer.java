@@ -25,6 +25,11 @@ import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkApplicationInfo;
 import org.lwjgl.vulkan.VkAttachmentDescription;
 import org.lwjgl.vulkan.VkAttachmentReference;
+import org.lwjgl.vulkan.VkClearValue;
+import org.lwjgl.vulkan.VkCommandBuffer;
+import org.lwjgl.vulkan.VkCommandBufferAllocateInfo;
+import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
+import org.lwjgl.vulkan.VkCommandPoolCreateInfo;
 import org.lwjgl.vulkan.VkDebugUtilsMessengerCreateInfoEXT;
 import org.lwjgl.vulkan.VkDevice;
 import org.lwjgl.vulkan.VkDeviceCreateInfo;
@@ -51,6 +56,7 @@ import org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo;
 import org.lwjgl.vulkan.VkQueue;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
 import org.lwjgl.vulkan.VkRect2D;
+import org.lwjgl.vulkan.VkRenderPassBeginInfo;
 import org.lwjgl.vulkan.VkRenderPassCreateInfo;
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
 import org.lwjgl.vulkan.VkSubpassDescription;
@@ -65,19 +71,21 @@ public class VulkanInitializer implements Disposable {
     private static VulkanInitializer instance = new VulkanInitializer();
 
     // VULKAN OBJECTS
-    private VkInstance     vkInstance;
-    private PhysicalDevice physicalDevice;
-    private VkDevice       device;
-    private long           surface;
-    private long           swapChain;
-    private List<Long>     swapChainImages;
-    private List<Long>     swapChainImageViews;
-    private int            swapChainImageFormat;
-    private VkExtent2D     swapChainExtent;
-    private List<Long>     swapChainFramebuffers;
-    private long           pipelineLayout;
-    private long           renderPass;
-    private long           graphicsPipeline;
+    private VkInstance            vkInstance;
+    private PhysicalDevice        physicalDevice;
+    private VkDevice              device;
+    private long                  surface;
+    private long                  swapChain;
+    private List<Long>            swapChainImages;
+    private List<Long>            swapChainImageViews;
+    private int                   swapChainImageFormat;
+    private VkExtent2D            swapChainExtent;
+    private List<Long>            swapChainFramebuffers;
+    private long                  pipelineLayout;
+    private long                  renderPass;
+    private long                  graphicsPipeline;
+    private long                  commandPool;
+    private List<VkCommandBuffer> commandBuffers;
 
     // QUEUES
     private VkQueue graphicsQueue;
@@ -129,8 +137,93 @@ public class VulkanInitializer implements Disposable {
             throw new RuntimeException(e);
         }
         this.createFrameBuffers();
+        this.createCommandPool();
+        this.createCommandBuffers();
 
         this.initialized = true;
+    }
+
+
+    private void createCommandPool() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            final QueueFamilyIndices queueFamilyIndices = this.findQueueFamilies(this.physicalDevice.getDevice());
+
+            final VkCommandPoolCreateInfo poolInfo = VkCommandPoolCreateInfo.calloc(stack);
+            poolInfo.sType(VK10.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
+            poolInfo.queueFamilyIndex(queueFamilyIndices.graphicsFamily);
+
+            final LongBuffer pCommandPool = stack.mallocLong(1);
+
+            if (VK10.vkCreateCommandPool(this.device, poolInfo, null, pCommandPool) != VK10.VK_SUCCESS) {
+                throw new RuntimeException("Failed to create command pool");
+            }
+
+            this.commandPool = pCommandPool.get(0);
+        }
+    }
+
+
+    private void createCommandBuffers() {
+        final int commandBuffersCount = this.swapChainFramebuffers.size();
+
+        this.commandBuffers = new ArrayList<>(commandBuffersCount);
+
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            final VkCommandBufferAllocateInfo allocInfo = VkCommandBufferAllocateInfo.calloc(stack);
+            allocInfo.sType(VK10.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+            allocInfo.commandPool(this.commandPool);
+            allocInfo.level(VK10.VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+            allocInfo.commandBufferCount(commandBuffersCount);
+
+            final PointerBuffer pCommandBuffers = stack.mallocPointer(commandBuffersCount);
+
+            if (VK10.vkAllocateCommandBuffers(this.device, allocInfo, pCommandBuffers) != VK10.VK_SUCCESS) {
+                throw new RuntimeException("Failed to allocate command buffers");
+            }
+
+            for (int i = 0; i < commandBuffersCount; i++) {
+                this.commandBuffers.add(new VkCommandBuffer(pCommandBuffers.get(i), this.device));
+            }
+
+            final VkCommandBufferBeginInfo beginInfo = VkCommandBufferBeginInfo.calloc(stack);
+            beginInfo.sType(VK10.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
+
+            final VkRenderPassBeginInfo renderPassInfo = VkRenderPassBeginInfo.calloc(stack);
+            renderPassInfo.sType(VK10.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
+            renderPassInfo.renderPass(this.renderPass);
+            final VkRect2D renderArea = VkRect2D.calloc(stack);
+            renderArea.offset(VkOffset2D.calloc(stack).set(0, 0));
+            renderArea.extent(this.swapChainExtent);
+            renderPassInfo.renderArea(renderArea);
+            final VkClearValue.Buffer clearValues = VkClearValue.calloc(1, stack);
+            clearValues.color().float32(stack.floats(0.0f, 0.0f, 0.0f, 1.0f));
+            renderPassInfo.pClearValues(clearValues);
+
+            for (int i = 0; i < commandBuffersCount; i++) {
+
+                final VkCommandBuffer commandBuffer = this.commandBuffers.get(i);
+
+                if (VK10.vkBeginCommandBuffer(commandBuffer, beginInfo) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to begin recording command buffer");
+                }
+
+                renderPassInfo.framebuffer(this.swapChainFramebuffers.get(i));
+
+                VK10.vkCmdBeginRenderPass(commandBuffer, renderPassInfo, VK10.VK_SUBPASS_CONTENTS_INLINE);
+
+                VK10.vkCmdBindPipeline(commandBuffer, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, this.graphicsPipeline);
+
+                VK10.vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+
+                VK10.vkCmdEndRenderPass(commandBuffer);
+
+                if (VK10.vkEndCommandBuffer(commandBuffer) != VK10.VK_SUCCESS) {
+                    throw new RuntimeException("Failed to record command buffer");
+                }
+
+            }
+
+        }
     }
 
 
@@ -747,6 +840,7 @@ public class VulkanInitializer implements Disposable {
 
     @Override
     public void dispose() {
+        VK10.vkDestroyCommandPool(this.device, this.commandPool, null);
         this.swapChainFramebuffers.forEach(framebuffer -> VK10.vkDestroyFramebuffer(this.device, framebuffer, null));
         VK10.vkDestroyPipeline(this.device, this.graphicsPipeline, null);
         VK10.vkDestroyPipelineLayout(this.device, this.pipelineLayout, null);
