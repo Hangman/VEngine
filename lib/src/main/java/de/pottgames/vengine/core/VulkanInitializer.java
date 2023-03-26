@@ -8,8 +8,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -36,6 +38,7 @@ import org.lwjgl.vulkan.VkDeviceCreateInfo;
 import org.lwjgl.vulkan.VkDeviceQueueCreateInfo;
 import org.lwjgl.vulkan.VkExtensionProperties;
 import org.lwjgl.vulkan.VkExtent2D;
+import org.lwjgl.vulkan.VkFenceCreateInfo;
 import org.lwjgl.vulkan.VkFramebufferCreateInfo;
 import org.lwjgl.vulkan.VkGraphicsPipelineCreateInfo;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
@@ -53,12 +56,16 @@ import org.lwjgl.vulkan.VkPipelineRasterizationStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineShaderStageCreateInfo;
 import org.lwjgl.vulkan.VkPipelineVertexInputStateCreateInfo;
 import org.lwjgl.vulkan.VkPipelineViewportStateCreateInfo;
+import org.lwjgl.vulkan.VkPresentInfoKHR;
 import org.lwjgl.vulkan.VkQueue;
 import org.lwjgl.vulkan.VkQueueFamilyProperties;
 import org.lwjgl.vulkan.VkRect2D;
 import org.lwjgl.vulkan.VkRenderPassBeginInfo;
 import org.lwjgl.vulkan.VkRenderPassCreateInfo;
+import org.lwjgl.vulkan.VkSemaphoreCreateInfo;
 import org.lwjgl.vulkan.VkShaderModuleCreateInfo;
+import org.lwjgl.vulkan.VkSubmitInfo;
+import org.lwjgl.vulkan.VkSubpassDependency;
 import org.lwjgl.vulkan.VkSubpassDescription;
 import org.lwjgl.vulkan.VkSurfaceCapabilitiesKHR;
 import org.lwjgl.vulkan.VkSurfaceFormatKHR;
@@ -69,6 +76,10 @@ import de.pottgames.vengine.core.validation.Utils;
 
 public class VulkanInitializer implements Disposable {
     private static VulkanInitializer instance = new VulkanInitializer();
+
+    // CONFIG
+    private static final int  MAX_FRAMES_IN_FLIGHT = 2;
+    private static final long UINT64_MAX           = 0xFFFFFFFFFFFFFFFFL;
 
     // VULKAN OBJECTS
     private VkInstance            vkInstance;
@@ -99,7 +110,10 @@ public class VulkanInitializer implements Disposable {
     private static final Set<String> DEVICE_EXTENSIONS = Stream.of(KHRSwapchain.VK_KHR_SWAPCHAIN_EXTENSION_NAME).collect(Collectors.toSet());
 
     // STATE
-    private boolean initialized = false;
+    private boolean             initialized = false;
+    private List<Frame>         inFlightFrames;
+    private Map<Integer, Frame> imagesInFlight;
+    private int                 currentFrame;
 
 
     public static VulkanInitializer get() {
@@ -139,6 +153,7 @@ public class VulkanInitializer implements Disposable {
         this.createFrameBuffers();
         this.createCommandPool();
         this.createCommandBuffers();
+        this.createSyncObjects();
 
         this.initialized = true;
     }
@@ -248,10 +263,19 @@ public class VulkanInitializer implements Disposable {
             subpass.colorAttachmentCount(1);
             subpass.pColorAttachments(colorAttachmentRef);
 
+            final VkSubpassDependency.Buffer dependency = VkSubpassDependency.calloc(1, stack);
+            dependency.srcSubpass(VK10.VK_SUBPASS_EXTERNAL);
+            dependency.dstSubpass(0);
+            dependency.srcStageMask(VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            dependency.srcAccessMask(0);
+            dependency.dstStageMask(VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            dependency.dstAccessMask(VK10.VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK10.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+
             final VkRenderPassCreateInfo renderPassInfo = VkRenderPassCreateInfo.calloc(stack);
             renderPassInfo.sType(VK10.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
             renderPassInfo.pAttachments(colorAttachment);
             renderPassInfo.pSubpasses(subpass);
+            renderPassInfo.pDependencies(dependency);
 
             final LongBuffer pRenderPass = stack.mallocLong(1);
 
@@ -260,6 +284,94 @@ public class VulkanInitializer implements Disposable {
             }
 
             this.renderPass = pRenderPass.get(0);
+        }
+    }
+
+
+    private void createSyncObjects() {
+
+        this.inFlightFrames = new ArrayList<>(VulkanInitializer.MAX_FRAMES_IN_FLIGHT);
+        this.imagesInFlight = new HashMap<>(this.swapChainImages.size());
+
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+
+            final VkSemaphoreCreateInfo semaphoreInfo = VkSemaphoreCreateInfo.calloc(stack);
+            semaphoreInfo.sType(VK10.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO);
+
+            final VkFenceCreateInfo fenceInfo = VkFenceCreateInfo.calloc(stack);
+            fenceInfo.sType(VK10.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
+            fenceInfo.flags(VK10.VK_FENCE_CREATE_SIGNALED_BIT);
+
+            final LongBuffer pImageAvailableSemaphore = stack.mallocLong(1);
+            final LongBuffer pRenderFinishedSemaphore = stack.mallocLong(1);
+            final LongBuffer pFence = stack.mallocLong(1);
+
+            for (int i = 0; i < VulkanInitializer.MAX_FRAMES_IN_FLIGHT; i++) {
+
+                if (VK10.vkCreateSemaphore(this.device, semaphoreInfo, null, pImageAvailableSemaphore) != VK10.VK_SUCCESS
+                        || VK10.vkCreateSemaphore(this.device, semaphoreInfo, null, pRenderFinishedSemaphore) != VK10.VK_SUCCESS
+                        || VK10.vkCreateFence(this.device, fenceInfo, null, pFence) != VK10.VK_SUCCESS) {
+
+                    throw new RuntimeException("Failed to create synchronization objects for the frame " + i);
+                }
+
+                this.inFlightFrames.add(new Frame(pImageAvailableSemaphore.get(0), pRenderFinishedSemaphore.get(0), pFence.get(0)));
+            }
+
+        }
+    }
+
+
+    public void drawFrame() {
+
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+
+            final Frame thisFrame = this.inFlightFrames.get(this.currentFrame);
+
+            VK10.vkWaitForFences(this.device, thisFrame.pFence(), true, VulkanInitializer.UINT64_MAX);
+
+            final IntBuffer pImageIndex = stack.mallocInt(1);
+
+            KHRSwapchain.vkAcquireNextImageKHR(this.device, this.swapChain, VulkanInitializer.UINT64_MAX, thisFrame.imageAvailableSemaphore(),
+                    VK10.VK_NULL_HANDLE, pImageIndex);
+            final int imageIndex = pImageIndex.get(0);
+
+            if (this.imagesInFlight.containsKey(imageIndex)) {
+                VK10.vkWaitForFences(this.device, this.imagesInFlight.get(imageIndex).fence(), true, VulkanInitializer.UINT64_MAX);
+            }
+
+            this.imagesInFlight.put(imageIndex, thisFrame);
+
+            final VkSubmitInfo submitInfo = VkSubmitInfo.calloc(stack);
+            submitInfo.sType(VK10.VK_STRUCTURE_TYPE_SUBMIT_INFO);
+
+            submitInfo.waitSemaphoreCount(1);
+            submitInfo.pWaitSemaphores(thisFrame.pImageAvailableSemaphore());
+            submitInfo.pWaitDstStageMask(stack.ints(VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT));
+
+            submitInfo.pSignalSemaphores(thisFrame.pRenderFinishedSemaphore());
+
+            submitInfo.pCommandBuffers(stack.pointers(this.commandBuffers.get(imageIndex)));
+
+            VK10.vkResetFences(this.device, thisFrame.pFence());
+
+            if (VK10.vkQueueSubmit(this.graphicsQueue, submitInfo, thisFrame.fence()) != VK10.VK_SUCCESS) {
+                throw new RuntimeException("Failed to submit draw command buffer");
+            }
+
+            final VkPresentInfoKHR presentInfo = VkPresentInfoKHR.calloc(stack);
+            presentInfo.sType(KHRSwapchain.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR);
+
+            presentInfo.pWaitSemaphores(thisFrame.pRenderFinishedSemaphore());
+
+            presentInfo.swapchainCount(1);
+            presentInfo.pSwapchains(stack.longs(this.swapChain));
+
+            presentInfo.pImageIndices(pImageIndex);
+
+            KHRSwapchain.vkQueuePresentKHR(this.presentQueue, presentInfo);
+
+            this.currentFrame = (this.currentFrame + 1) % VulkanInitializer.MAX_FRAMES_IN_FLIGHT;
         }
     }
 
@@ -840,6 +952,15 @@ public class VulkanInitializer implements Disposable {
 
     @Override
     public void dispose() {
+        // Wait for the device to complete all operations before release resources
+        VK10.vkDeviceWaitIdle(this.device);
+
+        this.inFlightFrames.forEach(frame -> {
+            VK10.vkDestroySemaphore(this.device, frame.renderFinishedSemaphore(), null);
+            VK10.vkDestroySemaphore(this.device, frame.imageAvailableSemaphore(), null);
+            VK10.vkDestroyFence(this.device, frame.fence(), null);
+        });
+        this.imagesInFlight.clear();
         VK10.vkDestroyCommandPool(this.device, this.commandPool, null);
         this.swapChainFramebuffers.forEach(framebuffer -> VK10.vkDestroyFramebuffer(this.device, framebuffer, null));
         VK10.vkDestroyPipeline(this.device, this.graphicsPipeline, null);

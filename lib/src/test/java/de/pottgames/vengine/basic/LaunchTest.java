@@ -43,7 +43,7 @@ public class LaunchTest implements Application {
         windowConfig.setCenter(false);
         windowConfig.setPosX(400);
         windowConfig.setPosY(400);
-        windowConfig.setTitle("LaunchTest");
+        windowConfig.setTitle("VulkanTest");
 
         new Engine(config, new LaunchTest());
     }

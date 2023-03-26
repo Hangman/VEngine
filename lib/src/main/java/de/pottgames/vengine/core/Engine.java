@@ -27,7 +27,8 @@ public class Engine {
         while (this.running) {
             GLFW.glfwPollEvents();
             app.onRender();
-            this.sync.sync(this.framerate);
+            Engine.VULKAN_INITIALIZER.drawFrame(); // FIXME: remove later
+            // this.sync.sync(this.framerate); // FIXME: probably won't need it as vulkan does sync for us
             if (this.window.shouldClose()) {
                 if (app.canClose()) {
                     this.running = false;
