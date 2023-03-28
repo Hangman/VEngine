@@ -18,8 +18,10 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import org.lwjgl.PointerBuffer;
+import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWVulkan;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.Pointer;
 import org.lwjgl.vulkan.EXTDebugUtils;
 import org.lwjgl.vulkan.KHRSurface;
 import org.lwjgl.vulkan.KHRSwapchain;
@@ -72,10 +74,11 @@ import org.lwjgl.vulkan.VkSurfaceFormatKHR;
 import org.lwjgl.vulkan.VkSwapchainCreateInfoKHR;
 import org.lwjgl.vulkan.VkViewport;
 
+import de.pottgames.vengine.core.GlfwWindow.ResizeCallBack;
 import de.pottgames.vengine.core.validation.Utils;
 
-public class VulkanInitializer implements Disposable {
-    private static VulkanInitializer instance = new VulkanInitializer();
+public class VulkanInitializer implements Disposable, ResizeCallBack {
+    private static VulkanInitializer instance;
 
     // CONFIG
     private static final int  MAX_FRAMES_IN_FLIGHT = 2;
@@ -98,6 +101,9 @@ public class VulkanInitializer implements Disposable {
     private long                  commandPool;
     private List<VkCommandBuffer> commandBuffers;
 
+    // GLFW OBJECTS
+    private final long window;
+
     // QUEUES
     private VkQueue graphicsQueue;
     private VkQueue presentQueue;
@@ -114,6 +120,13 @@ public class VulkanInitializer implements Disposable {
     private List<Frame>         inFlightFrames;
     private Map<Integer, Frame> imagesInFlight;
     private int                 currentFrame;
+    private boolean             framebufferResize;
+    private SwapMode            desiredSwapMode;
+
+
+    public static void create(long window) {
+        VulkanInitializer.instance = new VulkanInitializer(window);
+    }
 
 
     public static VulkanInitializer get() {
@@ -121,8 +134,9 @@ public class VulkanInitializer implements Disposable {
     }
 
 
-    private VulkanInitializer() {
+    private VulkanInitializer(long window) {
         this.validationLayers.add("VK_LAYER_KHRONOS_validation");
+        this.window = window;
     }
 
 
@@ -131,6 +145,7 @@ public class VulkanInitializer implements Disposable {
             throw new RuntimeException("Vulkan is already initialized");
         }
 
+        this.desiredSwapMode = desiredSwapMode;
         this.createInstance(title, debugMode);
         if (debugMode) {
             this.setupDebugMessenger();
@@ -142,20 +157,53 @@ public class VulkanInitializer implements Disposable {
             System.out.println("Supported API version: " + this.physicalDevice.getApiVersion().toString());
         }
         this.createLogicalDevice(debugMode);
-        this.createSwapChain(window.getFrameBufferWidth(), window.getFrameBufferHeight(), desiredSwapMode);
+        this.createCommandPool();
+        this.createSwapChainObjects(desiredSwapMode);
+        this.createSyncObjects();
+
+        this.initialized = true;
+    }
+
+
+    @Override
+    public void resizeCallback(int width, int height) {
+        this.framebufferResize = true;
+    }
+
+
+    private void createSwapChainObjects(SwapMode swapMode) {
+        this.createSwapChain(swapMode);
         this.createImageViews();
         this.createRenderPass();
         try {
             this.createGraphicsPipeline();
         } catch (final IOException e) {
-            throw new RuntimeException(e);
+            // TODO Auto-generated catch block
+            e.printStackTrace();
         }
         this.createFrameBuffers();
-        this.createCommandPool();
         this.createCommandBuffers();
-        this.createSyncObjects();
+    }
 
-        this.initialized = true;
+
+    private void recreateSwapChain(SwapMode swapMode) {
+        int width = 0;
+        int height = 0;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            final IntBuffer widthBuffer = stack.ints(0);
+            final IntBuffer heightBuffer = stack.ints(0);
+
+            while (widthBuffer.get(0) == 0 && heightBuffer.get(0) == 0) {
+                GLFW.glfwGetFramebufferSize(this.window, widthBuffer, heightBuffer);
+                GLFW.glfwWaitEvents();
+                width = widthBuffer.get(0);
+                height = heightBuffer.get(0);
+            }
+        }
+
+        VK10.vkDeviceWaitIdle(this.device);
+        this.disposeSwapChain();
+        this.createSwapChainObjects(swapMode);
     }
 
 
@@ -332,8 +380,14 @@ public class VulkanInitializer implements Disposable {
 
             final IntBuffer pImageIndex = stack.mallocInt(1);
 
-            KHRSwapchain.vkAcquireNextImageKHR(this.device, this.swapChain, VulkanInitializer.UINT64_MAX, thisFrame.imageAvailableSemaphore(),
+            int vkResult = KHRSwapchain.vkAcquireNextImageKHR(this.device, this.swapChain, VulkanInitializer.UINT64_MAX, thisFrame.imageAvailableSemaphore(),
                     VK10.VK_NULL_HANDLE, pImageIndex);
+
+            if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR) {
+                this.recreateSwapChain(this.desiredSwapMode);
+                return;
+            }
+
             final int imageIndex = pImageIndex.get(0);
 
             if (this.imagesInFlight.containsKey(imageIndex)) {
@@ -369,7 +423,14 @@ public class VulkanInitializer implements Disposable {
 
             presentInfo.pImageIndices(pImageIndex);
 
-            KHRSwapchain.vkQueuePresentKHR(this.presentQueue, presentInfo);
+            vkResult = KHRSwapchain.vkQueuePresentKHR(this.presentQueue, presentInfo);
+
+            if (vkResult == KHRSwapchain.VK_ERROR_OUT_OF_DATE_KHR || vkResult == KHRSwapchain.VK_SUBOPTIMAL_KHR || this.framebufferResize) {
+                this.framebufferResize = false;
+                this.recreateSwapChain(this.desiredSwapMode);
+            } else if (vkResult != VK10.VK_SUCCESS) {
+                throw new RuntimeException("Failed to present swap chain image");
+            }
 
             this.currentFrame = (this.currentFrame + 1) % VulkanInitializer.MAX_FRAMES_IN_FLIGHT;
         }
@@ -681,13 +742,13 @@ public class VulkanInitializer implements Disposable {
     }
 
 
-    private void createSwapChain(int width, int height, SwapMode desiredSwapMode) {
+    private void createSwapChain(SwapMode desiredSwapMode) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             final SwapChainSupportDetails swapChainSupport = this.querySwapChainSupport(this.physicalDevice.getDevice(), stack);
 
             final VkSurfaceFormatKHR surfaceFormat = this.chooseSwapSurfaceFormat(swapChainSupport.formats);
             final SwapMode presentMode = this.chooseSwapPresentMode(swapChainSupport.presentModes, desiredSwapMode);
-            final VkExtent2D extent = this.chooseSwapExtent(stack, swapChainSupport.capabilities, width, height);
+            final VkExtent2D extent = this.chooseSwapExtent(stack, swapChainSupport.capabilities);
 
             final IntBuffer imageCount = stack.ints(swapChainSupport.capabilities.minImageCount() + 1);
 
@@ -769,12 +830,17 @@ public class VulkanInitializer implements Disposable {
     }
 
 
-    private VkExtent2D chooseSwapExtent(MemoryStack stack, VkSurfaceCapabilitiesKHR capabilities, int width, int height) {
+    private VkExtent2D chooseSwapExtent(MemoryStack stack, VkSurfaceCapabilitiesKHR capabilities) {
         if (capabilities.currentExtent().width() != VulkanUtils.UINT32_MAX) {
             return capabilities.currentExtent();
         }
 
-        final VkExtent2D actualExtent = VkExtent2D.malloc(stack).set(width, height);
+        final IntBuffer width = MemoryStack.stackGet().ints(0);
+        final IntBuffer height = MemoryStack.stackGet().ints(0);
+
+        GLFW.glfwGetFramebufferSize(this.window, width, height);
+
+        final VkExtent2D actualExtent = VkExtent2D.malloc(stack).set(width.get(0), height.get(0));
 
         final VkExtent2D minExtent = capabilities.minImageExtent();
         final VkExtent2D maxExtent = capabilities.maxImageExtent();
@@ -927,6 +993,13 @@ public class VulkanInitializer implements Disposable {
     }
 
 
+    private PointerBuffer asPointerBuffer(MemoryStack stack, List<? extends Pointer> list) {
+        final PointerBuffer buffer = stack.mallocPointer(list.size());
+        list.forEach(buffer::put);
+        return buffer.rewind();
+    }
+
+
     private void setupDebugMessenger() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             final VkDebugUtilsMessengerCreateInfoEXT createInfo = VkDebugUtilsMessengerCreateInfoEXT.calloc(stack);
@@ -955,6 +1028,7 @@ public class VulkanInitializer implements Disposable {
         // Wait for the device to complete all operations before release resources
         VK10.vkDeviceWaitIdle(this.device);
 
+        this.disposeSwapChain();
         this.inFlightFrames.forEach(frame -> {
             VK10.vkDestroySemaphore(this.device, frame.renderFinishedSemaphore(), null);
             VK10.vkDestroySemaphore(this.device, frame.imageAvailableSemaphore(), null);
@@ -962,12 +1036,6 @@ public class VulkanInitializer implements Disposable {
         });
         this.imagesInFlight.clear();
         VK10.vkDestroyCommandPool(this.device, this.commandPool, null);
-        this.swapChainFramebuffers.forEach(framebuffer -> VK10.vkDestroyFramebuffer(this.device, framebuffer, null));
-        VK10.vkDestroyPipeline(this.device, this.graphicsPipeline, null);
-        VK10.vkDestroyPipelineLayout(this.device, this.pipelineLayout, null);
-        VK10.vkDestroyRenderPass(this.device, this.renderPass, null);
-        this.swapChainImageViews.forEach(imageView -> VK10.vkDestroyImageView(this.device, imageView, null));
-        KHRSwapchain.vkDestroySwapchainKHR(this.device, this.swapChain, null);
         VK10.vkDestroyDevice(this.device, null);
         if (this.debugMessenger != -1L) {
             Utils.destroyDebugUtilsMessengerEXT(this.vkInstance, this.debugMessenger, null);
@@ -976,6 +1044,19 @@ public class VulkanInitializer implements Disposable {
         VK10.vkDestroyInstance(this.vkInstance, null);
 
         this.initialized = false;
+    }
+
+
+    private void disposeSwapChain() {
+        this.swapChainFramebuffers.forEach(framebuffer -> VK10.vkDestroyFramebuffer(this.device, framebuffer, null));
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VK10.vkFreeCommandBuffers(this.device, this.commandPool, this.asPointerBuffer(stack, this.commandBuffers));
+        }
+        VK10.vkDestroyPipeline(this.device, this.graphicsPipeline, null);
+        VK10.vkDestroyPipelineLayout(this.device, this.pipelineLayout, null);
+        VK10.vkDestroyRenderPass(this.device, this.renderPass, null);
+        this.swapChainImageViews.forEach(imageView -> VK10.vkDestroyImageView(this.device, imageView, null));
+        KHRSwapchain.vkDestroySwapchainKHR(this.device, this.swapChain, null);
     }
 
 

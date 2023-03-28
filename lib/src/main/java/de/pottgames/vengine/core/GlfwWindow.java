@@ -8,14 +8,22 @@ import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.system.MemoryUtil;
 
 public class GlfwWindow implements Disposable {
-    protected final long window;
-    private boolean      visible  = false;
-    private int[]        tempInt1 = new int[1];
-    private int[]        tempInt2 = new int[1];
+    protected final long   window;
+    private boolean        visible  = false;
+    private int[]          tempInt1 = new int[1];
+    private int[]          tempInt2 = new int[1];
+    private ResizeCallBack resizeCallBack;
 
 
     public GlfwWindow(WindowConfiguration config) {
         this.window = this.init(config);
+    }
+
+
+    @FunctionalInterface
+    public interface ResizeCallBack {
+        void resizeCallback(int width, int height);
+
     }
 
 
@@ -50,7 +58,21 @@ public class GlfwWindow implements Disposable {
             this.visible = true;
         }
 
+        GLFW.glfwSetFramebufferSizeCallback(window, this::framebufferResizeCallback);
+
         return window;
+    }
+
+
+    private void framebufferResizeCallback(long window, int width, int height) {
+        if (window == this.window) {
+            this.resizeCallBack.resizeCallback(width, height);
+        }
+    }
+
+
+    public void setResizeCallBack(ResizeCallBack resizeCallBack) {
+        this.resizeCallBack = resizeCallBack;
     }
 
 
